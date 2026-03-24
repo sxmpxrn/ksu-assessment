@@ -67,10 +67,7 @@ function getClientIP(req: Request) {
 --------------------------- */
 
 // ฟังก์ชันตรวจสอบ username/password กับ LDAP server
-async function ldapAuth(username: string, password: string) {
-
-  // กำหนด Base URL: ใช้ SITE_URL ถ้ามี ถ้าไม่มีให้ใช้ localhost
-  const baseUrl = process.env.SITE_URL || "http://localhost:3000"
+async function ldapAuth(username: string, password: string, baseUrl: string) {
 
   // สร้าง AbortController สำหรับยกเลิก request ถ้าใช้เวลานานเกินไป
   const controller = new AbortController()
@@ -141,13 +138,29 @@ export async function POST(req: Request) {
   const userAgent = req.headers.get("user-agent") || "unknown"
   // ดึง origin header เพื่อตรวจสอบ CSRF
   const origin = req.headers.get("origin")
-  
-  // กำหนด Expected Origin: ใช้ SITE_URL ถ้ามี ถ้าไม่มีให้ใช้ origin ของ request เอง (สำหรับ dev)
-  const expectedOrigin = process.env.SITE_URL || (origin?.includes("localhost") ? origin : null)
+  const host = req.headers.get("host") 
+  const protocol = req.headers.get("x-forwarded-proto") || (origin?.startsWith("https") ? "https" : "http")
+  const currentOrigin = host ? `${protocol}://${host}` : null
+
+  // กำหนด Expected Origin: 
+  // 1. ใช้ SITE_URL ถ้ามี
+  // 2. ถ้าไม่มี หรือ SITE_URL เป็น localhost แต่รันบน production ให้ใช้ currentOrigin แทน
+  let expectedOrigin = process.env.SITE_URL
+  if (!expectedOrigin || (expectedOrigin.includes("localhost") && !host?.includes("localhost"))) {
+    expectedOrigin = currentOrigin || expectedOrigin
+  }
+
+  // ลบทิ้ง trailing slash เพื่อความแน่นอนในการเปรียบเทียบ
+  const cleanOrigin = origin?.replace(/\/$/, "")
+  const cleanExpected = expectedOrigin?.replace(/\/$/, "")
 
   // ตรวจสอบ CSRF — ถ้า origin ไม่ตรงกับ domain ที่อนุญาต ให้ปฏิเสธ
-  if (origin && expectedOrigin && origin !== expectedOrigin) {
-    return NextResponse.json({ error: "ไม่อนุญาตให้เข้าถึง (CSRF Error)" }, { status: 403 })
+  if (cleanOrigin && cleanExpected && cleanOrigin !== cleanExpected) {
+    // พ่น Debug ออกมาใน Error Message เลยเพื่อให้ User เห็นว่ามันไม่ตรงกันยังไง
+    return NextResponse.json({ 
+      error: `ไม่อนุญาตให้เข้าถึง (CSRF Error)`,
+      debug: process.env.NODE_ENV === "development" ? { origin: cleanOrigin, expected: cleanExpected } : undefined
+    }, { status: 403 })
   }
 
   // ดึงขนาดของ request body จาก header
@@ -263,8 +276,8 @@ export async function POST(req: Request) {
     let ldapData
 
     try {
-      // ส่ง username/password ไปตรวจสอบกับ LDAP server
-      ldapData = await ldapAuth(normalizedUser, password)
+      // ส่ง username/password ไปตรวจสอบกับ LDAP server (ใช้ baseUrl ที่คำนวณได้)
+      ldapData = await ldapAuth(normalizedUser, password, expectedOrigin || "http://localhost:3000")
     } catch (ldapErr) {
 
       // log error ที่ได้รับจาก LDAP สำหรับ debug
