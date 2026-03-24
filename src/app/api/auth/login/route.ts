@@ -69,6 +69,9 @@ function getClientIP(req: Request) {
 // ฟังก์ชันตรวจสอบ username/password กับ LDAP server
 async function ldapAuth(username: string, password: string) {
 
+  // กำหนด Base URL: ใช้ SITE_URL ถ้ามี ถ้าไม่มีให้ใช้ localhost
+  const baseUrl = process.env.SITE_URL || "http://localhost:3000"
+
   // สร้าง AbortController สำหรับยกเลิก request ถ้าใช้เวลานานเกินไป
   const controller = new AbortController()
   // ตั้ง timeout 5 วินาที — ถ้านานกว่านี้จะ abort request อัตโนมัติ
@@ -77,13 +80,13 @@ async function ldapAuth(username: string, password: string) {
   try {
 
     // ส่ง POST request ไปยัง LDAP API endpoint
-    const res = await fetch("http://localhost:3000/api/ldap", {
+    const res = await fetch(`${baseUrl}/api/ldap`, {
       method: "POST",
       headers: {
         // บอก server ว่า body เป็น JSON
         "Content-Type": "application/json",
         // ระบุ origin ของ request เพื่อให้ server ตรวจสอบ CORS
-        "Origin": process.env.SITE_URL || "http://localhost:3000"
+        "Origin": baseUrl
       },
       // ส่ง signal เพื่อให้ AbortController ยกเลิก request ได้
       signal: controller.signal,
@@ -138,17 +141,13 @@ export async function POST(req: Request) {
   const userAgent = req.headers.get("user-agent") || "unknown"
   // ดึง origin header เพื่อตรวจสอบ CSRF
   const origin = req.headers.get("origin")
-  const expectedOrigin = process.env.SITE_URL || "http://localhost:3000"
+  
+  // กำหนด Expected Origin: ใช้ SITE_URL ถ้ามี ถ้าไม่มีให้ใช้ origin ของ request เอง (สำหรับ dev)
+  const expectedOrigin = process.env.SITE_URL || (origin?.includes("localhost") ? origin : null)
 
-  // ตรวจสอบ CSRF — ถ้า origin ไม่ตรงกับ domain ที่อนุญาต ให้ปฏิเสธทันที
-  // อนุโลมให้ใช้งานใน development mode ได้แม้ไม่กำหนด SITE_URL
-  if (origin && origin !== expectedOrigin) {
-    // เพิ่มการอนุโลมถ้า origin เป็น localhost สำหรับ dev
-    if (process.env.NODE_ENV !== "production" && origin.includes("localhost")) {
-      // ผ่าน
-    } else {
-      return NextResponse.json({ error: "ไม่อนุญาตให้เข้าถึง" }, { status: 403 })
-    }
+  // ตรวจสอบ CSRF — ถ้า origin ไม่ตรงกับ domain ที่อนุญาต ให้ปฏิเสธ
+  if (origin && expectedOrigin && origin !== expectedOrigin) {
+    return NextResponse.json({ error: "ไม่อนุญาตให้เข้าถึง (CSRF Error)" }, { status: 403 })
   }
 
   // ดึงขนาดของ request body จาก header
